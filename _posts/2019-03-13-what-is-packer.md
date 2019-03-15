@@ -15,7 +15,7 @@ Packer是一个自动化制作各种镜像的脚步工具，由golang编写，目前（2019-03-15）已经支
 ## Packer编译安装
 官方的文档对于个操作的描述非常简单，项目目录下执行"make dev"，正在玩起来事还是挺麻烦的。当然基本和Packer项目本身无关，都是golang配置和相关工具的使用问题。（请原谅我是golang新手）
 
-我一直以来没有写过比较大的golang轮子，习惯上都是将golang文件保存在$GOPATH/src/my_file下，所以对于Packer也是这样来的。
+我一直以来没有写过比较大的golang轮子，习惯上都是将golang文件保存在$GOPATH/src/my\_file下，所以对于Packer也是这样来的。
 
 ``` bash
 cd $GOPATH/src/my_file
@@ -55,7 +55,7 @@ govendor list #查看所有的包
 我以为解决了所有的问题，开心的去编译了发现还是太天真。
 编译时报错，找不到模块github.com/hashicorp/packer，这不就它自己嘛，它编译需要找到自己（黑人问号）。
 
-然后我就胡乱尝试，发现一个解决方案（应该叫规避 :P ），就是将当前的$GOPATH/src/my_file/packer目录移动到$GOPATH/src/github.com/kardianos/govendor。
+然后我就胡乱尝试，发现一个解决方案（应该叫规避 :P ），就是将当前的$GOPATH/src/my\_file/packer目录移动到$GOPATH/src/github.com/kardianos/govendor。
 
 ``` bash
 mkdir $GOPATH/src/github.com/kardianos/
