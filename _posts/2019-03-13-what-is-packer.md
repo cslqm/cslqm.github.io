@@ -17,7 +17,7 @@ Packer是一个自动化制作各种镜像的脚步工具，由golang编写，目前（2019-03-15）已经支
 
 我一直以来没有写过比较大的golang轮子，习惯上都是将golang文件保存在$GOPATH/src/my\_file下，所以对于Packer也是这样来的。
 
-cd $GOPATH/src/my_file
+cd $GOPATH/src/my\_file
 git clone https://github.com/hashicorp/packer.git
 cd packer
 git checkout -b dev v1.3.5    #选择当前发布的tag
@@ -53,7 +53,7 @@ govendor list #查看所有的包
 然后我就胡乱尝试，发现一个解决方案（应该叫规避 :P ），就是将当前的$GOPATH/src/my\_file/packer目录移动到$GOPATH/src/github.com/kardianos/govendor。
 
 mkdir $GOPATH/src/github.com/kardianos/
-mv $GOPATH/src/my_file/packer $GOPATH/src/github.com/kardianos/
+mv $GOPATH/src/my\_file/packer $GOPATH/src/github.com/kardianos/
 cd $GOPATH/src/github.com/kardianos/
 make dev
 
