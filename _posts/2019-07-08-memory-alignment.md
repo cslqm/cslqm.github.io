@@ -46,14 +46,14 @@ type Part2 struct {
 
 Part1和Part2直观来看是不是都应该是1+4+1+8+1字节使用量。但是对齐之后实际内存使用情况会有巨大的变化。
 
-先分析Part1（以4字节为块大小），由于 a bool 和 b int32 是1字节和4字节使用量所以他们放不到一个块内，所以是2个块的大小所以可以表示为axxx|bbbb。
-a和b都已经排好位置，c int8 和 d int64分别是1字节和8字节使用量所以也不能放到一个块内，所以就是3个块可以表示为cxxx|dddd|dddd。e byte 被剩下来了只能自己占用一个块，exxx。
-所以Part1内存分布 axxx|bbbb|cxxx|dddd|dddd|exxx,用了6个块。
+先分析Part1（以4字节为块大小），由于 a bool 和 b int32 是1字节和4字节使用量所以他们放不到一个块内，所以是2个块的大小所以可以表示为axxx\|bbbb。
+a和b都已经排好位置，c int8 和 d int64分别是1字节和8字节使用量所以也不能放到一个块内，所以就是3个块可以表示为cxxx\|dddd\|dddd。e byte 被剩下来了只能自己占用一个块，exxx。
+所以Part1内存分布 axxx\|bbbb\|cxxx\|dddd\|dddd\|exxx,用了6个块。
 
 在来分析Part2（以4字节为块大小），e byte 、 c int8、a bool 自身使用量都是1字节，他们可以放到一个块内，表示为 ecax。
 b int32自己正好4字节，为1个块，表示为 bbbb。
-d int64为8字节，为2个块，表示为dddd|dddd。
-所以Part2内存分布 ecax|bbbb|dddd|dddd。
+d int64为8字节，为2个块，表示为dddd\|dddd。
+所以Part2内存分布 ecax\|bbbb\|dddd\|dddd。
 
 可以看到Part1比Part2占用的内存多了8个字节。
 
