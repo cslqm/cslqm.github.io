@@ -64,6 +64,10 @@ disqus_username: disqus_mMoGlBjfEW
 # Netease settings
 netease_comment: false
 
+#gitment
+comment_gitment_repo: https://github.com/cslqm/cslqm.github.io
+comment_gitment_clientId: 562105782b411906a415
+comment_gitment_clientSecret: b01c5f6962ee86eb5f6f5a69a5262570df55d8a1
 
 
 # Analytics settings
