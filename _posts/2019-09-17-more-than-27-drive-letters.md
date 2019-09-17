@@ -36,7 +36,7 @@ tags:
 
 
 盘符分配失败是什么原因呢？
-在windows中，对于新盘的使用，需要先将其初始化为gpt和mbr，之后新建卷，这样会分配出一个volume，然后给volume分配盘符，个人感觉分配盘符的过程和 Linux中的 mount 过程非常相似。而且 windows ntfs 确实支持挂载。比如 diskpart assign、mountvol。
+在windows中，对于新盘的使用，需要先将其初始化为gpt或mbr，之后新建卷，这样会分配出一个volume，然后给volume分配盘符，个人感觉分配盘符的过程和 Linux中的 mount 过程非常相似。而且 windows ntfs 确实支持挂载。比如 diskpart assign、mountvol。
 
 牛人画的 他自己理解的 windows 文件系统树结构。 https://blog.csdn.net/dog250/article/details/100140882
 
