@@ -33,10 +33,10 @@ tags:
 > 这是因为，MS Dos 已有的很多命令行工具。当时微软做开发的人有 DEC 的背景，DEC 的操作系统上是用 / 做命令行参数分割符，而不是 Unix 系列用的 - ，就这样沿用到了 MS Dos 里。btw， 我读大学时第一次接触 Linux ，感觉输入最不习惯的就是用 - 而不是 / 。
 > 
 > 为了防止混淆，目录风格符就不能再使用 / 了，DEC 系统中用的是点 "." ，可 MS Dos 学了 CP/M 用 . 做文件后缀名分割，所以就用了让后代程序员深恶痛绝的反斜杠 \ 。
-> 
-> 
-> 盘符分配失败是什么原因呢？
-> 在windows中，对于新盘的使用，需要先将其初始化为gpt和mbr，之后新建卷，这样会分配出一个volume，然后给volume分配盘符，个人感觉分配盘符的过程和 Linux中的 mount 过程非常相似。而且 windows ntfs 确实支持挂载。比如 diskpart assign、mountvol。
+
+
+盘符分配失败是什么原因呢？
+在windows中，对于新盘的使用，需要先将其初始化为gpt和mbr，之后新建卷，这样会分配出一个volume，然后给volume分配盘符，个人感觉分配盘符的过程和 Linux中的 mount 过程非常相似。而且 windows ntfs 确实支持挂载。比如 diskpart assign、mountvol。
 
 牛人画的 他自己理解的 windows 文件系统树结构。 https://blog.csdn.net/dog250/article/details/100140882
 
