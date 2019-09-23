@@ -13,9 +13,9 @@ IBM确实强大，博客也写的非常好。
 ## LVM 的结构
 LVM 的组织为三种元素：
 
-卷（Volume）：物理 和逻辑卷 和卷组
-区段（Extent）：物理 和逻辑区段
-设备映射器（Device mapper）：Linux 内核模块、
+- 卷（Volume）：物理 和逻辑卷 和卷组
+- 区段（Extent）：物理 和逻辑区段
+- 设备映射器（Device mapper）：Linux 内核模块、
 
 ### 卷
 Linux LVM 组织为物理卷（PV）、卷组（VG）和逻辑卷（LV）。物理卷 是物理磁盘或物理磁盘分区（比如 /dev/hda 或 /dev/hdb1）。卷组 是物理卷的集合。卷组 可以在逻辑上划分成多个逻辑卷。
