@@ -66,6 +66,10 @@ layout: default
                 <!-- 网易云跟帖 评论框 end -->
                 {% endif %}
 
+		{% if site.livere_uid %}
+		{{ include livere.html }}
+		{% endif %}
+
 		{% if site.comment_gitment_repo %}
 		<div id="gitmentContainer"></div>
 		<link rel="stylesheet" href="https://billts.site/extra_css/gitment.css">
