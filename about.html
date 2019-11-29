@@ -25,6 +25,11 @@ multilingual: true
 </div>
 
 
+{% if site.livere_uid %}
+{% include livere.html %}
+{% endif %}
+
+
 {% if site.disqus_username %}
 <!-- disqus 评论框 start -->
 <div class="comment">
