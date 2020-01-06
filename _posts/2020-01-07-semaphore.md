@@ -58,6 +58,467 @@ A semaphore will nowadays typically wrap sys_futex under Linux (optionally with 
 A spinlock is typically implemented using atomic operations, and without using anything provided by the operating system. In the past, this meant using either compiler intrinsics or non-portable assembler instructions. Meanwhile both C++11 and C11 have atomic operations as part of the language, so apart from the general difficulty of writing provably correct lock-free code, it is now possible to implement lock-free code in an entirely portable and (almost) painless way.
 
 
+### 关于信号量
+
+#### 什么是信号量
+
+信号量的使用主要是用来保护共享资源，使得资源在一个时刻只有一个进程（线程）所拥有。
+
+	信号量的值为正的时候，说明它空闲。所测试的线程可以锁定而使用它。若为0，说明它被占用，测试的线程要进入睡眠队列中，等待被唤醒。
+
+为了防止出现因多个程序同时访问一个共享资源而引发的一系列问题，我们需要一种方法，它可以通过生成并使用令牌来授权，在任一时刻只能有一个执行线程访问代码的临界区域。
+
+临界区域是指执行数据更新的代码需要独占式地执行。而信号量就可以提供这样的一种访问机制，让一个临界区同一时间只有一个线程在访问它，也就是说信号量是用来调协进程对共享资源的访问的。
+
+信号量是一个特殊的变量，程序对其访问都是原子操作，且只允许对它进行等待（即P(信号变量))和发送（即V(信号变量))信息操作。
+
+最简单的信号量是只能取0和1的变量，这也是信号量最常见的一种形式，叫做二进制信号量。而可以取多个正整数的信号量被称为通用信号量。这里主要讨论二进制信号量。
+
+#### 工作原理
+
+主要就是有三个字母了，P、V，S（信标/标志位/旗标）。
+
+计数信号量具备两种操作动作，称为V（signal()）与P（wait()）（即部分参考书常称的“PV操作”）。V操作会增加信号标S的数值，P操作会减少它。
+
+运作方式：
+
+初始化，给与它一个非负数的整数值。
+
+运行P（wait()），信号标S的值将被减少。企图进入临界区段的进程，需要先运行P（wait()）。当信号标S减为负值时，进程会被挡住，不能继续；当信号标S不为负值时，进程可以获准进入临界区段。
+
+运行V（signal()），信号标S的值会被增加。结束离开临界区段的进程，将会运行V（signal()）。当信号标S不为负值时，先前被挡住的其他进程，将可获准进入临界区段。
+
+	举个例子，就是两个进程共享信号量sv，一旦其中一个进程执行了P(sv)操作，它将得到信号量，并可以进入临界区，使sv减1。而第二个进程将被阻止进入临界区，因为当它试图执行P(sv)时，sv为0，它会被挂起以等待第一个进程离开临界区域并执行V(sv)释放信号量，这时第二个进程就可以恢复执行。
+
+#### 信号量区分
+
+POSIX 信号量和 XSI 信号量。
+
+Linux提供两种信号量：
+
+- 内核信号量，由内核控制路径使用
+- 用户态进程使用的信号量，这种信号量又分为 POSIX 信号量()和 SYSTEM V 信号量。
+
+POSIX 信号量又分为有名信号量和无名信号量
+
+有名信号量，其值保存在文件中, 所以它可以用于线程也可以用于进程间的同步。无名信号量，其值保存在内存中。
+
+
+对 POSIX 来说，信号量是个非负整数。常用于线程间同步。
+
+而 SYSTEM V 信号量则是一个或多个信号量的集合，它对应的是一个信号量结构体，这个结构体是为 SYSTEM V IPC 服务的，信号量只不过是它的一部分。常用于进程间同步。
+
+POSIX 信号量的引用头文件是<semaphore.h>，而 SYSTEM V 信号量的引用头文件是<sys/sem.h>
+
+从使用的角度，SYSTEM V 信号量是复杂的，而 POSIX 信号量是简单。比如，POSIX 信号量的创建和初始化或 PV 操作就很非常方便。
+
+### Linux 内核信号量
+
+Linux 内核的信号量在概念和原理上与用户态的 SYSTEM V 的 IPC 机制信号量是一样的，但是它绝不可能在内核之外使用，它是一种睡眠锁。
+
+如果有一个任务想要获得已经被占用的信号量时，信号量会将其放入一个等待队列（它不是站在外面痴痴地等待而是将自己的名字写在任务队列中）然后让其睡眠。
+
+当持有信号量的进程将信号释放后，处于等待队列中的一个任务将被唤醒（因为队列中可能不止一个任务），并让其获得信号量。
+
+这一点与自旋锁不同，处理器可以去执行其它代码。
+
+它与自旋锁的差异：由于争用信号量的进程在等待锁重新变为可用时会睡眠，所以信号量适用于锁会被长时间持有的情况；
+
+相反，锁被短时间持有时，使用信号量就不太适宜了，因为睡眠、维护等待队列以及唤醒所花费的开销可能比锁占用的全部时间表还要长；
+
+由于执行线程在锁被争用时会睡眠，所以只能在进程上下文中才能获得信号量锁，因为在中断上下文中是不能进行调试的；持有信号量的进行也可以去睡眠，当然也可以不睡眠，因为当其他进程争用信号量时不会因此而死锁；不能同时占用信号量和自旋锁，因为自旋锁不可以睡眠而信号量锁可以睡眠。相对而来说信号量比较简单，它不会禁止内核抢占，持有信号量的代码可以被抢占。
+
+信号量还有一个特征，就是它允许多个持有者，而自旋锁在任何时候只能允许一个持有者。
+
+当然我们经常遇到也是只有一个持有者，这种信号量叫二值信号量或者叫互斥信号量。允许有多个持有者的信号量叫计数信号量，在初始化时要说明最多允许有多少个持有者（Count 值）
+
+信号量在创建时需要设置一个初始值，表示同时可以有几个任务可以访问该信号量保护的共享资源，初始值为1就变成互斥锁（Mutex），即同时只能有一个任务可以访问信号量保护的共享资源。
+
+当任务访问完被信号量保护的共享资源后，必须释放信号量，释放信号量通过把信号量的值加 1 实现，如果信号量的值为非正数，表明有任务等待当前信号量，因此它也唤醒所有等待该信号量的任务。
+
+####  内核信号量的构成
+
+内核信号量类似于自旋锁，因为当锁关闭着时，它不允许内核控制路径继续进行。然而，当内核控制路径试图获取内核信号量锁保护的忙资源时，相应的进程就被挂起。只有在资源被释放时，进程才再次变为可运行。
+
+只有可以睡眠的函数才能获取内核信号量；中断处理程序和可延迟函数都不能使用内核信号量。
+
+内核信号量是struct semaphore类型的对象，在内核源码中位于include\linux\semaphore.h文件
+
+``` c
+## 伪代码
+struct semaphore
+{
+　　 atomic_t count;
+　　 int sleepers;
+　　 wait_queue_head_t wait;
+}
+```
+| 成员 | 描述 |
+| :-: | :-: |
+| count | 相当于信号量的值，大于0，资源空闲；等于0，资源忙，但没有进程等待这个保护的资源；小于0，资源不可用，并至少有一个进程等待资源 |
+| wait | 存放等待队列链表的地址，当前等待资源的所有睡眠进程都会放在这个链表中 |
+| sleepers | 存放一个标志，表示是否有一些进程在信号量上睡眠 |
+
+
+#### 等待队列
+
+上面已经提到了内核信号量使用了等待队列 wait_queue 来实现阻塞操作。
+
+当某任务由于没有某种条件没有得到满足时，它就被挂到等待队列中睡眠。当条件得到满足时，该任务就被移出等待队列，此时并不意味着该任务就被马上执行，因为它又被移进工作队列中等待 CPU 资源，在适当的时机被调度。
+
+内核信号量是在内部使用等待队列的，也就是说该等待队列对用户是隐藏的，无须用户干涉。由用户真正使用的等待队列我们将在另外的篇章进行详解。
+
+#### 相关的函数(头文件)
+
+	注意：文章中见到的代码都是 2.6.32-27 版本内核。
+
+``` c
+static inline void sema_init(struct semaphore *sem, int val)
+{
+	static struct lock_class_key __key;
+	*sem = (struct semaphore) __SEMAPHORE_INITIALIZER(*sem, val);
+	lockdep_init_map(&sem->lock.dep_map, "semaphore->lock", &__key, 0);
+}
+
+#define init_MUTEX(sem)		sema_init(sem, 1)
+#define init_MUTEX_LOCKED(sem)	sema_init(sem, 0)
+
+extern void down(struct semaphore *sem);
+extern int __must_check down_interruptible(struct semaphore *sem);
+extern int __must_check down_killable(struct semaphore *sem);
+extern int __must_check down_trylock(struct semaphore *sem);
+extern int __must_check down_timeout(struct semaphore *sem, long jiffies);
+extern void up(struct semaphore *sem);
+```
+
+#### 与初始化有关的函数
+
+``` c
+# linux/semaphore.h
+#define __SEMAPHORE_INITIALIZER(name, n)				\
+{									\
+	.lock		= __SPIN_LOCK_UNLOCKED((name).lock),		\
+	.count		= n,						\
+	.wait_list	= LIST_HEAD_INIT((name).wait_list),		\
+}
+```
+
+该宏声明一个信号量name是直接将结构体中count值设置成n，此时信号量可用于实现进程间的互斥量。
+
+``` c
+#define DECLARE_MUTEX(name)	\
+	struct semaphore name = __SEMAPHORE_INITIALIZER(name, 1)
+```
+
+该宏声明一个互斥锁 name，但把它的初始值设置为1。
+
+``` c
+static inline void sema_init(struct semaphore *sem, int val)
+{
+	static struct lock_class_key __key;
+	*sem = (struct semaphore) __SEMAPHORE_INITIALIZER(*sem, val);
+	lockdep_init_map(&sem->lock.dep_map, "semaphore->lock", &__key, 0);
+}
+```
+初始化一个 sem。该函用于数初始化设置信号量的初值，它设置信号量sem的值为val。
+
+``` c
+#define init_MUTEX(sem)		sema_init(sem, 1)
+```
+初始化一个默认打开状态的 sem。初始化一个互斥锁，即它把信号量sem的值设置为1。
+
+``` c
+#define init_MUTEX_LOCKED(sem)	sema_init(sem, 0)
+```
+初始化一个互斥锁，但它把信号量sem的值设置为0，即一开始就处在已锁状态
+
+	注意：对于信号量的初始化函数 Linux 最新版本存在变化，如 init_MUTEX 和 init_MUTEX_LOCKED 等初始化函数目前新的内核中已经没有或者更换了了名字等
+	因此建议以后在编程中遇到需要使用信号量的时候尽量采用sema_init(struct semaphore *sem, int val)函数，因为这个函数就目前为止从未发生变化。
+
+#### 获取信号量–申请内核信号量所保护的资源
+
+``` c
+/**
+ * down - acquire the semaphore
+ * @sem: the semaphore to be acquired
+ *
+ * Acquires the semaphore.  If no more tasks are allowed to acquire the
+ * semaphore, calling this function will put the task to sleep until the
+ * semaphore is released.
+ *
+ * Use of this function is deprecated, please use down_interruptible() or
+ * down_killable() instead.
+ */
+void down(struct semaphore *sem)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&sem->lock, flags);
+	if (likely(sem->count > 0))
+		sem->count--;
+	else
+		__down(sem);
+	spin_unlock_irqrestore(&sem->lock, flags);
+}
+EXPORT_SYMBOL(down);
+```
+
+1. sem->count > 0 是表示未锁。所以直接减 1。
+2. 如果等于或者小于 0 表示已锁。调用__down(sem)。
+
+``` c
+static noinline void __sched __down(struct semaphore *sem)
+{
+	__down_common(sem, TASK_UNINTERRUPTIBLE, MAX_SCHEDULE_TIMEOUT);
+}
+
+```
+
+直接调用__down_common(sem, TASK_UNINTERRUPTIBLE, MAX_SCHEDULE_TIMEOUT)。
+
+``` c
+/*
+ * Because this function is inlined, the 'state' parameter will be
+ * constant, and thus optimised away by the compiler.  Likewise the
+ * 'timeout' parameter for the cases without timeouts.
+ */
+static inline int __sched __down_common(struct semaphore *sem, long state,
+								long timeout)
+{
+	struct task_struct *task = current;
+	struct semaphore_waiter waiter;
+
+	list_add_tail(&waiter.list, &sem->wait_list);
+	waiter.task = task;
+	waiter.up = 0;
+
+	for (;;) {
+		if (signal_pending_state(state, task))
+			goto interrupted;
+		if (timeout <= 0)
+			goto timed_out;
+		__set_task_state(task, state);
+		spin_unlock_irq(&sem->lock);
+		timeout = schedule_timeout(timeout);
+		spin_lock_irq(&sem->lock);
+		if (waiter.up)
+			return 0;
+	}
+
+ timed_out:
+	list_del(&waiter.list);
+	return -ETIME;
+
+ interrupted:
+	list_del(&waiter.list);
+	return -EINTR;
+}
+```
+
+1. list_add_tail(&waiter.list, &sem->wait_list) 向等待列表中添加一个空的新任务。
+2. 更新任务状态__set_task_state(task, state)。
+3. 释放锁spin_unlock_irq(&sem->lock)，睡眠操作第一步。
+4. schedule_timeout(timeout) 开始睡眠。
+5. signal_pending_state(state, task) 可中断在这里进行。
+
+___
+
+
+``` c
+/**
+ * down_interruptible - acquire the semaphore unless interrupted
+ * @sem: the semaphore to be acquired
+ *
+ * Attempts to acquire the semaphore.  If no more tasks are allowed to
+ * acquire the semaphore, calling this function will put the task to sleep.
+ * If the sleep is interrupted by a signal, this function will return -EINTR.
+ * If the semaphore is successfully acquired, this function returns 0.
+ */
+int down_interruptible(struct semaphore *sem)
+{
+	unsigned long flags;
+	int result = 0;
+
+	spin_lock_irqsave(&sem->lock, flags);
+	if (likely(sem->count > 0))
+		sem->count--;
+	else
+		result = __down_interruptible(sem);
+	spin_unlock_irqrestore(&sem->lock, flags);
+
+	return result;
+}
+EXPORT_SYMBOL(down_interruptible);
+```
+在 sem-> count 小于等于 0 时调用__down_interruptible(sem)。
+
+``` c
+static noinline int __sched __down_interruptible(struct semaphore *sem)
+{
+	return __down_common(sem, TASK_INTERRUPTIBLE, MAX_SCHEDULE_TIMEOUT);
+}
+```
+发起可中断的睡眠。
+
+___
+
+
+``` c
+/**
+ * down_killable - acquire the semaphore unless killed
+ * @sem: the semaphore to be acquired
+ *
+ * Attempts to acquire the semaphore.  If no more tasks are allowed to
+ * acquire the semaphore, calling this function will put the task to sleep.
+ * If the sleep is interrupted by a fatal signal, this function will return
+ * -EINTR.  If the semaphore is successfully acquired, this function returns
+ * 0.
+ */
+int down_killable(struct semaphore *sem)
+{
+	unsigned long flags;
+	int result = 0;
+
+	spin_lock_irqsave(&sem->lock, flags);
+	if (likely(sem->count > 0))
+		sem->count--;
+	else
+		result = __down_killable(sem);
+	spin_unlock_irqrestore(&sem->lock, flags);
+
+	return result;
+}
+EXPORT_SYMBOL(down_killable);
+```
+在加锁状态下调用__down_killable(sem)。
+
+``` c
+static noinline int __sched __down_killable(struct semaphore *sem)
+{
+	return __down_common(sem, TASK_KILLABLE, MAX_SCHEDULE_TIMEOUT);
+}
+```
+进行可以 kill 的睡眠。
+
+___
+
+
+``` c
+/**
+ * down_trylock - try to acquire the semaphore, without waiting
+ * @sem: the semaphore to be acquired
+ *
+ * Try to acquire the semaphore atomically.  Returns 0 if the mutex has
+ * been acquired successfully or 1 if it it cannot be acquired.
+ *
+ * NOTE: This return value is inverted from both spin_trylock and
+ * mutex_trylock!  Be careful about this when converting code.
+ *
+ * Unlike mutex_trylock, this function can be used from interrupt context,
+ * and the semaphore can be released by any task or interrupt.
+ */
+int down_trylock(struct semaphore *sem)
+{
+	unsigned long flags;
+	int count;
+
+	spin_lock_irqsave(&sem->lock, flags);
+	count = sem->count - 1;
+	if (likely(count >= 0))
+		sem->count = count;
+	spin_unlock_irqrestore(&sem->lock, flags);
+
+	return (count < 0);
+}
+EXPORT_SYMBOL(down_trylock);
+```
+将 sem->count - 1 的结果赋值给 count，count 为 >= 0 表示可以未锁。
+return (count < 0) 
+
+| 返回值 | count 值 | 描述 |
+| :-: | :-: | :-: |
+| 1 | 负数 | 已锁，trylock 是失败的 |
+| 0 | 大于等于 0 | 未锁，trylock 是成功的 |
+
+可以看到 down_trylock 不会进行休眠。不成功直接返回非负数。
+
+___
+
+``` c
+/**
+ * down_timeout - acquire the semaphore within a specified time
+ * @sem: the semaphore to be acquired
+ * @jiffies: how long to wait before failing
+ *
+ * Attempts to acquire the semaphore.  If no more tasks are allowed to
+ * acquire the semaphore, calling this function will put the task to sleep.
+ * If the semaphore is not released within the specified number of jiffies,
+ * this function returns -ETIME.  It returns 0 if the semaphore was acquired.
+ */
+int down_timeout(struct semaphore *sem, long jiffies)
+{
+	unsigned long flags;
+	int result = 0;
+
+	spin_lock_irqsave(&sem->lock, flags);
+	if (likely(sem->count > 0))
+		sem->count--;
+	else
+		result = __down_timeout(sem, jiffies);
+	spin_unlock_irqrestore(&sem->lock, flags);
+
+	return result;
+}
+EXPORT_SYMBOL(down_timeout);
+```
+
+在已锁时，发起一个有超时时间的睡眠。
+
+``` c
+static noinline int __sched __down_timeout(struct semaphore *sem, long jiffies)
+{
+	return __down_common(sem, TASK_UNINTERRUPTIBLE, jiffies);
+}
+```
+
+
+``` c
+/**
+ * up - release the semaphore
+ * @sem: the semaphore to release
+ *
+ * Release the semaphore.  Unlike mutexes, up() may be called from any
+ * context and even by tasks which have never called down().
+ */
+void up(struct semaphore *sem)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&sem->lock, flags);
+	if (likely(list_empty(&sem->wait_list)))
+		sem->count++;
+	else
+		__up(sem);
+	spin_unlock_irqrestore(&sem->lock, flags);
+}
+EXPORT_SYMBOL(up);
+```
+1. list_empty(&sem->wait_list) 如果任务列表为空，直接sem->count 加 1 开锁。
+2. &sem->wait_list 不为空，存在等待任务，调用__up(sem) 取出一个任务，尝试唤醒此任务。
+
+``` c
+static noinline void __sched __up(struct semaphore *sem)
+{
+	struct semaphore_waiter *waiter = list_first_entry(&sem->wait_list,
+						struct semaphore_waiter, list);
+	list_del(&waiter->list);
+	waiter->up = 1;
+	wake_up_process(waiter->task);
+}
+```
+
+1. 从任务列表中删除任务 list_del(&waiter->list)。
+2. wake_up_process(waiter->task) 唤醒任务。
 
 
 
