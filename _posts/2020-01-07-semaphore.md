@@ -97,7 +97,7 @@ POSIX 信号量和 XSI 信号量。
 Linux提供两种信号量：
 
 - 内核信号量，由内核控制路径使用
-- 用户态进程使用的信号量，这种信号量又分为 POSIX 信号量()和 SYSTEM V 信号量。
+- 用户态进程使用的信号量，这种信号量又分为 POSIX 信号量和 SYSTEM V 信号量。
 
 POSIX 信号量又分为有名信号量和无名信号量
 
@@ -148,11 +148,12 @@ Linux 内核的信号量在概念和原理上与用户态的 SYSTEM V 的 IPC �
 ## 伪代码
 struct semaphore
 {
-　　 atomic_t count;
-　　 int sleepers;
-　　 wait_queue_head_t wait;
+	atomic_t count;
+	int sleepers;
+	wait_queue_head_t wait;
 }
 ```
+
 | 成员 | 描述 |
 | :-: | :-: |
 | count | 相当于信号量的值，大于0，资源空闲；等于0，资源忙，但没有进程等待这个保护的资源；小于0，资源不可用，并至少有一个进程等待资源 |
@@ -481,6 +482,7 @@ static noinline int __sched __down_timeout(struct semaphore *sem, long jiffies)
 }
 ```
 
+#### 释放内核信号量所保护的资源
 
 ``` c
 /**
@@ -519,6 +521,624 @@ static noinline void __sched __up(struct semaphore *sem)
 
 1. 从任务列表中删除任务 list_del(&waiter->list)。
 2. wake_up_process(waiter->task) 唤醒任务。
+
+#### semaphore 例子
+
+``` c
+/*                                                     
+ * $Id: hellop.c,v 1.4 2004/09/26 07:02:43 gregkh Exp $ 
+ */                                                    
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/semaphore.h>
+#include <linux/fs.h>
+
+#include <linux/wait.h>
+#include <linux/sched.h>
+#include <asm/uaccess.h>
+
+MODULE_LICENSE("Dual BSD/GPL");
+
+/*                                                        
+ * These lines, although not shown in the book,           
+ * are needed to make hello.c run properly even when      
+ * your kernel has version support enabled                
+ */                                                       
+
+
+#define MAJOR_NUM 0
+
+static ssize_t globalvar_read(struct file *, char *, size_t, loff_t*);
+static ssize_t globalvar_write(struct file *, const char *, size_t, loff_t*);
+
+struct file_operations globalvar_fops =
+{
+        read : globalvar_read,
+        write: globalvar_write,
+};
+
+static int global_var = 0;
+static struct semaphore sem;
+static wait_queue_head_t outq;
+static int flag = 0;
+
+static int __init globalvar_init(void)
+{
+        int ret;
+        ret = register_chrdev(MAJOR_NUM, "globalvar", &globalvar_fops);
+        if (ret)
+        {
+                printk("globalvar register success");
+                init_MUTEX(&sem);   //初始化一个互斥锁，即它把信号量sem的值设置为1
+                init_waitqueue_head(&outq); //初始化等待队列outq
+                return 0;
+        }
+        return ret;
+}
+
+static void __exit globalvar_exit(void)
+{
+        unregister_chrdev(MAJOR_NUM, "globalvar");
+}
+
+//读设备
+static ssize_t globalvar_read(struct file *filp, char *buf, size_t len, loff_t *off)
+{
+        //等待数据可获得
+        if (wait_event_interruptible(outq, flag != 0)) // wait_event_interruptible把进程状态设为TASK_INTERRUPTIBLE，nonexclusive
+        {
+                return - ERESTARTSYS;
+        }
+
+        if (down_interruptible(&sem)) //获得信号量，相当于获得锁
+        {
+                return - ERESTARTSYS;
+        }
+
+        flag = 0;
+        if (copy_to_user(buf, &global_var, sizeof(int)))
+        {
+                up(&sem);  //如果读取失败，则释放信号量，相当于释放锁
+                return -EFAULT;
+        }
+        up(&sem); //若读取成功也释放信号量
+        return sizeof(int);
+}
+
+//写设备
+static ssize_t globalvar_write(struct file *filp, const char *buf, size_t len,loff_t *off)
+{
+        if (down_interruptible(&sem)) //获得信号量
+        {
+                return -ERESTARTSYS;
+        }
+        if (copy_from_user(&global_var, buf, sizeof(int)))
+        {
+                up(&sem); //写失败后释放锁
+                return -EFAULT;
+        }
+        up(&sem); //写成功后，也释放信号量
+        flag = 1;
+        wake_up_interruptible(&outq); //唤醒等待进程，通知已经有数据可以读取
+        return sizeof(int);
+}
+
+module_init(globalvar_init);
+module_exit(globalvar_exit);
+```
+
+转自： https://blog.csdn.net/wangchaoxjtuse/article/details/6025385
+
+
+### Linux 读写信号量
+
+ldd 中紧跟着就讲到了 rwsem，
+
+跟自旋锁一样，信号量也有区分读-写信号量之分
+
+如果一个读写信号量当前没有被写者拥有并且也没有写者等待读者释放信号量，那么任何读者都可以成功获得该读写信号量；
+
+否则，读者必须被挂起直到写者释放该信号量。如果一个读写信号量当前没有被读者或写者拥有并且也没有写者等待该信号量，那么一个写者可以成功获得该读写信号量，否则写者将被挂起，直到没有任何访问者。因此，写者是排他性的，独占性的。
+
+读写信号量有两种实现，一种是通用的，不依赖于硬件架构，因此，增加新的架构不需要重新实现它，但缺点是性能低，获得和释放读写信号量的开销大；另一种是架构相关的，因此性能高，获取和释放读写信号量的开销小，但增加新的架构需要重新实现。在内核配置时，可以通过选项去控制使用哪一种实现。
+
+2.6.32.27 内核中的 rwsem 定义。
+
+``` c
+# asm/rwsem.h
+struct rw_semaphore {
+	rwsem_count_t		count;
+	spinlock_t		wait_lock;
+	struct list_head	wait_list;
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map dep_map;
+#endif
+};
+```
+
+
+
+读写信号量的相关API有：
+
+``` c
+# asm/rwsem.h
+DECLARE_RWSEM(name)
+
+#define DECLARE_RWSEM(name)					\
+	struct rw_semaphore name = __RWSEM_INITIALIZER(name)
+
+#define __RWSEM_INITIALIZER(name)				\
+{								\
+	RWSEM_UNLOCKED_VALUE, __SPIN_LOCK_UNLOCKED((name).wait_lock), \
+	LIST_HEAD_INIT((name).wait_list) __RWSEM_DEP_MAP_INIT(name) \
+}
+```
+该宏声明一个读写信号量 name 并对其进行初始化。
+
+___
+
+``` c
+#define init_rwsem(sem)						\
+do {								\
+	static struct lock_class_key __key;			\
+								\
+	__init_rwsem((sem), #sem, &__key);			\
+} while (0)
+
+extern void __init_rwsem(struct rw_semaphore *sem, const char *name,
+			 struct lock_class_key *key);
+
+# lib/rwsem.h 可能不对，没有调试过
+/*
+ * Initialize an rwsem:
+ */
+void __init_rwsem(struct rw_semaphore *sem, const char *name,
+		  struct lock_class_key *key)
+{
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	/*
+	 * Make sure we are not reinitializing a held semaphore:
+	 */
+	debug_check_no_locks_freed((void *)sem, sizeof(*sem));
+	lockdep_init_map(&sem->dep_map, name, key, 0);
+#endif
+	sem->count = RWSEM_UNLOCKED_VALUE;
+	spin_lock_init(&sem->wait_lock);
+	INIT_LIST_HEAD(&sem->wait_list);
+}
+
+EXPORT_SYMBOL(__init_rwsem);
+```
+
+该函数对读写信号量 sem 进行初始化。
+
+
+#### 获取信号量–申请内核信号量所保护的资源
+
+``` c
+# kernel/rwsem.c
+/*
+ * lock for reading
+ */
+void __sched down_read(struct rw_semaphore *sem)
+{
+	might_sleep();
+	rwsem_acquire_read(&sem->dep_map, 0, 0, _RET_IP_);
+
+	LOCK_CONTENDED(sem, __down_read_trylock, __down_read);
+}
+
+EXPORT_SYMBOL(down_read);
+
+# asm/rwsem.h
+/*
+ * lock for reading
+ */
+static inline void __down_read(struct rw_semaphore *sem)
+{
+	asm volatile("# beginning down_read\n\t"
+		     LOCK_PREFIX _ASM_INC "(%1)\n\t"
+		     /* adds 0x00000001, returns the old value */
+		     "  jns        1f\n"
+		     "  call call_rwsem_down_read_failed\n"
+		     "1:\n\t"
+		     "# ending down_read\n\t"
+		     : "+m" (sem->count)
+		     : "a" (sem)
+		     : "memory", "cc");
+}
+
+# /arch/x86/lib/rwsem_64.S
+/* Fix up special calling conventions */
+ENTRY(call_rwsem_down_read_failed)
+        save_common_regs
+        pushq %rdx
+        movq %rax,%rdi
+        call rwsem_down_read_failed
+        popq %rdx
+        restore_common_regs
+        ret
+        ENDPROC(call_rwsem_down_read_failed)
+
+```
+
+1. 在未配置 CONFIG_DEBUG_SPINLOCK_SLEEP 情况下，might_sleep 和 rwsem_acquire_read 为空。
+2. LOCK_CONTENDED 宏最后为__down_read(sem)。
+3. 读者调用该函数来得到读写信号量sem。该函数会导致调用者睡眠，因此只能在进程上下文使用
+
+``` c
+# kernel/rwsem.c
+/*
+ * trylock for reading -- returns 1 if successful, 0 if contention
+ */
+int down_read_trylock(struct rw_semaphore *sem)
+{
+	int ret = __down_read_trylock(sem);
+
+	if (ret == 1)
+		rwsem_acquire_read(&sem->dep_map, 0, 1, _RET_IP_);
+	return ret;
+}
+
+EXPORT_SYMBOL(down_read_trylock);
+
+# arch/x86/asm/rwsem.h
+/*
+ * trylock for reading -- returns 1 if successful, 0 if contention
+ */
+static inline int __down_read_trylock(struct rw_semaphore *sem)
+{
+	rwsem_count_t result, tmp;
+	asm volatile("# beginning __down_read_trylock\n\t"
+		     "  mov          %0,%1\n\t"
+		     "1:\n\t"
+		     "  mov          %1,%2\n\t"
+		     "  add          %3,%2\n\t"
+		     "  jle	     2f\n\t"
+		     LOCK_PREFIX "  cmpxchg  %2,%0\n\t"
+		     "  jnz	     1b\n\t"
+		     "2:\n\t"
+		     "# ending __down_read_trylock\n\t"
+		     : "+m" (sem->count), "=&a" (result), "=&r" (tmp)
+		     : "i" (RWSEM_ACTIVE_READ_BIAS)
+		     : "memory", "cc");
+	return result >= 0 ? 1 : 0;
+}
+```
+
+1. 在未配置 CONFIG_DEBUG_SPINLOCK_SLEEP 情况下，rwsem_acquire_read 为空。
+2. 该函数类似于down_read，只是它不会导致调用者睡眠。它尽力得到读写信号量sem，如果能够立即得到，它就得到该读写信号量，并且返回1，否则表示不能立刻得到该信号量，返回0。因此，它也可以在中断上下文使用。
+
+``` c
+# kernel/rwsem.c
+/*
+ * lock for writing
+ */
+void __sched down_write(struct rw_semaphore *sem)
+{
+	might_sleep();
+	rwsem_acquire(&sem->dep_map, 0, 0, _RET_IP_);
+
+	LOCK_CONTENDED(sem, __down_write_trylock, __down_write);
+}
+
+EXPORT_SYMBOL(down_write);
+
+# arch/x86/include/asm/rwsem.h
+static inline void __down_write(struct rw_semaphore *sem)
+{
+	__down_write_nested(sem, 0);
+}
+
+/*
+ * lock for writing
+ */
+static inline void __down_write_nested(struct rw_semaphore *sem, int subclass)
+{
+	rwsem_count_t tmp;
+
+	tmp = RWSEM_ACTIVE_WRITE_BIAS;
+	asm volatile("# beginning down_write\n\t"
+		     LOCK_PREFIX "  xadd      %1,(%2)\n\t"
+		     /* subtract 0x0000ffff, returns the old value */
+		     "  test      %1,%1\n\t"
+		     /* was the count 0 before? */
+		     "  jz        1f\n"
+		     "  call call_rwsem_down_write_failed\n"
+		     "1:\n"
+		     "# ending down_write"
+		     : "+m" (sem->count), "=d" (tmp)
+		     : "a" (sem), "1" (tmp)
+		     : "memory", "cc");
+}
+
+# /arch/x86/lib/rwsem_64.S
+ENTRY(call_rwsem_down_write_failed)
+        save_common_regs
+        movq %rax,%rdi
+        call rwsem_down_write_failed
+        restore_common_regs
+        ret
+        ENDPROC(call_rwsem_down_write_failed)
+```
+
+1. 在未配置 CONFIG_DEBUG_SPINLOCK_SLEEP 情况下，might_sleep 和 rwsem_acquire 为空。
+2. LOCK_CONTENDED 宏实际为__down_write(sem)。
+3. 写者使用该函数来得到读写信号量sem，它也会导致调用者睡眠，因此只能在进程上下文使用。
+
+``` c
+# kernel/rwsem.h
+/*
+ * trylock for writing -- returns 1 if successful, 0 if contention
+ */
+int down_write_trylock(struct rw_semaphore *sem)
+{
+	int ret = __down_write_trylock(sem);
+
+	if (ret == 1)
+		rwsem_acquire(&sem->dep_map, 0, 1, _RET_IP_);
+	return ret;
+}
+
+# arch/x86/include/asm/rwsem.h
+/*
+ * trylock for writing -- returns 1 if successful, 0 if contention
+ */
+static inline int __down_write_trylock(struct rw_semaphore *sem)
+{
+	rwsem_count_t ret = cmpxchg(&sem->count,
+				    RWSEM_UNLOCKED_VALUE,
+				    RWSEM_ACTIVE_WRITE_BIAS);
+	if (ret == RWSEM_UNLOCKED_VALUE)
+		return 1;
+	return 0;
+}
+
+```
+
+1. 在未配置 CONFIG_DEBUG_SPINLOCK_SLEEP 情况下， rwsem_acquire 为空。
+2. 该函数类似于down_write，只是它不会导致调用者睡眠。该函数尽力得到读写信号量，如果能够立刻获得，就获得该读写信号量并且返回1，否则表示无法立刻获得，返回0。它可以在中断上下文使用。
+
+#### 释放内核信号量所保护的资源
+
+``` c
+# linux/rwsem.h
+/*
+ * release a read lock
+ */
+void up_read(struct rw_semaphore *sem)
+{
+	rwsem_release(&sem->dep_map, 1, _RET_IP_);
+
+	__up_read(sem);
+}
+
+# arch/x86/include/asm/rwsem.h
+/*
+ * unlock after reading
+ */
+static inline void __up_read(struct rw_semaphore *sem)
+{
+	rwsem_count_t tmp = -RWSEM_ACTIVE_READ_BIAS;
+	asm volatile("# beginning __up_read\n\t"
+		     LOCK_PREFIX "  xadd      %1,(%2)\n\t"
+		     /* subtracts 1, returns the old value */
+		     "  jns        1f\n\t"
+		     "  call call_rwsem_wake\n"
+		     "1:\n"
+		     "# ending __up_read\n"
+		     : "+m" (sem->count), "=d" (tmp)
+		     : "a" (sem), "1" (tmp)
+		     : "memory", "cc");
+}
+
+# /arch/x86/lib/rwsem_64.S
+ENTRY(call_rwsem_wake)
+        decw %dx    /* do nothing if still outstanding active readers */
+        jnz 1f
+        save_common_regs
+        movq %rax,%rdi
+        call rwsem_wake
+        restore_common_regs
+1:      ret
+        ENDPROC(call_rwsem_wake)
+```
+1. rwsem_release 啥也没做，空的。
+2. 读者使用该函数释放读写信号量sem。它与down_read或down_read_trylock配对使用。如果down_read_trylock返回0，不需要调用up_read来释放读写信号量，因为根本就没有获得信号量。
+
+``` c
+# linux/rwsem.h
+/*
+ * release a write lock
+ */
+void up_write(struct rw_semaphore *sem)
+{
+	rwsem_release(&sem->dep_map, 1, _RET_IP_);
+
+	__up_write(sem);
+}
+
+EXPORT_SYMBOL(up_write);
+
+# arch/x86/include/asm/rwsem.h
+/*
+ * unlock after writing
+ */
+static inline void __up_write(struct rw_semaphore *sem)
+{
+	rwsem_count_t tmp;
+	asm volatile("# beginning __up_write\n\t"
+		     LOCK_PREFIX "  xadd      %1,(%2)\n\t"
+		     /* tries to transition
+			0xffff0001 -> 0x00000000 */
+		     "  jz       1f\n"
+		     "  call call_rwsem_wake\n"
+		     "1:\n\t"
+		     "# ending __up_write\n"
+		     : "+m" (sem->count), "=d" (tmp)
+		     : "a" (sem), "1" (-RWSEM_ACTIVE_WRITE_BIAS)
+		     : "memory", "cc");
+}
+```
+
+1. rwsem_release 什么也没有做。
+2. 写者调用该函数释放信号量sem。它与down_write或down_write_trylock配对使用。如果down_write_trylock返回0，不需要调用up_write，因为返回0表示没有获得该读写信号量
+
+
+``` c
+# linux/rwsem.h
+/*
+ * downgrade write lock to read lock
+ */
+void downgrade_write(struct rw_semaphore *sem)
+{
+	/*
+	 * lockdep: a downgraded write will live on as a write
+	 * dependency.
+	 */
+	__downgrade_write(sem);
+}
+
+# arch/x86/include/asm/rwsem.h
+/*
+ * downgrade write lock to read lock
+ */
+static inline void __downgrade_write(struct rw_semaphore *sem)
+{
+	asm volatile("# beginning __downgrade_write\n\t"
+		     LOCK_PREFIX _ASM_ADD "%2,(%1)\n\t"
+		     /*
+		      * transitions 0xZZZZ0001 -> 0xYYYY0001 (i386)
+		      *     0xZZZZZZZZ00000001 -> 0xYYYYYYYY00000001 (x86_64)
+		      */
+		     "  jns       1f\n\t"
+		     "  call call_rwsem_downgrade_wake\n"
+		     "1:\n\t"
+		     "# ending __downgrade_write\n"
+		     : "+m" (sem->count)
+		     : "a" (sem), "er" (-RWSEM_WAITING_BIAS)
+		     : "memory", "cc");
+}
+
+# arch/x86/lib/rwsem_64.S
+/* Fix up special calling conventions */
+ENTRY(call_rwsem_downgrade_wake)
+        save_common_regs
+        pushq %rdx
+        movq %rax,%rdi
+        call rwsem_downgrade_wake
+        popq %rdx
+        restore_common_regs
+        ret
+        ENDPROC(call_rwsem_downgrade_wake)
+```
+
+该函数用于把写者降级为读者，这有时是必要的。因为写者是排他性的，因此在写者保持读写信号量期间，任何读者或写者都将无法访问该读写信号量保护的共享资源，对于那些当前条件下不需要写访问的写者，降级为读者将，使得等待访问的读者能够立刻访问，从而增加了并发性，提高了效率。
+读写信号量适于在读多写少的情况下使用，在linux内核中对进程的内存映像描述结构的访问就使用了读写信号量进行保护。
+究竟什么时候使用自旋锁什么时候使用信号量，下面给出建议的方案
+当对低开销、短期、中断上下文加锁，优先考虑自旋锁；当对长期、持有锁需要休眠的任务，优先考虑信号量。
+
+#### rwsem 例子
+
+注释未修改。
+
+``` c
+/*                                                     
+ * $Id: hellop.c,v 1.4 2004/09/26 07:02:43 gregkh Exp $ 
+ */                                                    
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/fs.h>
+#include <linux/rwsem.h>
+
+#include <linux/wait.h>
+#include <linux/sched.h>
+#include <asm/uaccess.h>
+
+MODULE_LICENSE("Dual BSD/GPL");
+
+/*                                                        
+ * These lines, although not shown in the book,           
+ * are needed to make hello.c run properly even when      
+ * your kernel has version support enabled                
+ */                                                       
+
+
+#define MAJOR_NUM 0
+
+static ssize_t globalvar_read(struct file *, char *, size_t, loff_t*);
+static ssize_t globalvar_write(struct file *, const char *, size_t, loff_t*);
+
+struct file_operations globalvar_fops =
+{
+        read : globalvar_read,
+        write: globalvar_write,
+};
+
+static int global_var = 0;
+static struct rw_semaphore rwsem;
+static wait_queue_head_t outq;
+static int flag = 0;
+
+static int __init globalvar_init(void)
+{
+        int ret;
+        ret = register_chrdev(MAJOR_NUM, "globalvar", &globalvar_fops);
+        if (ret)
+        {
+                printk("globalvar register success");
+                init_rwsem(&rwsem);   //初始化一个互斥锁
+                init_waitqueue_head(&outq); //初始化等待队列outq
+                return 0;
+        }
+        return ret;
+}
+
+static void __exit globalvar_exit(void)
+{
+        unregister_chrdev(MAJOR_NUM, "globalvar");
+}
+
+//读设备
+static ssize_t globalvar_read(struct file *filp, char *buf, size_t len, loff_t *off)
+{
+        //等待数据可获得
+        if (wait_event_interruptible(outq, flag != 0)) // wait_event_interruptible把进程状态设为TASK_INTERRUPTIBLE，nonexclusive
+        {
+                return - ERESTARTSYS;
+        }
+
+        down_read(&rwsem); //获得信号量，相当于获得锁
+
+        flag = 0;
+        if (copy_to_user(buf, &global_var, sizeof(int)))
+        {
+                up_read(&rwsem);  //如果读取失败，则释放信号量，相当于释放锁
+                return -EFAULT;
+        }
+        up_read(&rwsem); //若读取成功也释放信号量
+        return sizeof(int);
+}
+
+//写设备
+static ssize_t globalvar_write(struct file *filp, const char *buf, size_t len,loff_t *off)
+{
+        down_write(&rwsem); //获得信号量
+
+        if (copy_from_user(&global_var, buf, sizeof(int)))
+        {
+                up_write(&rwsem); //写失败后释放锁
+                return -EFAULT;
+        }
+        up_write(&rwsem); //写成功后，也释放信号量
+        flag = 1;
+        wake_up_interruptible(&outq); //唤醒等待进程，通知已经有数据可以读取
+        return sizeof(int);
+}
+
+module_init(globalvar_init);
+module_exit(globalvar_exit);
+```
 
 
 
