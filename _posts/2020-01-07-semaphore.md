@@ -1040,7 +1040,7 @@ ENTRY(call_rwsem_downgrade_wake)
 
 #### rwsem 例子
 
-注释未修改。
+注释未修改。这个例子只是学习使用，没有体现出 rw 的特定。
 
 ``` c
 /*                                                     
@@ -1139,6 +1139,187 @@ static ssize_t globalvar_write(struct file *filp, const char *buf, size_t len,lo
 module_init(globalvar_init);
 module_exit(globalvar_exit);
 ```
+
+例子2
+
+``` c
+/*                                                     
+ * $Id: hellop.c,v 1.4 2004/09/26 07:02:43 gregkh Exp $ 
+ */                                                    
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/fs.h>
+#include <linux/rwsem.h>
+
+#include <linux/wait.h>
+#include <linux/sched.h>
+#include <asm/uaccess.h>
+#include <linux/kthread.h>
+
+MODULE_LICENSE("Dual BSD/GPL");
+
+/*                                                        
+ * These lines, although not shown in the book,           
+ * are needed to make hello.c run properly even when      
+ * your kernel has version support enabled                
+ */                                                       
+
+
+static struct rw_semaphore sem;
+
+static void print_sem(struct rw_semaphore *sem)
+{
+        printk(KERN_ALERT "sem.count=0x%016lxn", sem->count);
+}
+
+static void get_read_lock(struct rw_semaphore *sem, char *name)
+{
+        printk(KERN_ALERT "%s is waiting for readn", name);
+        down_read(sem);
+        printk(KERN_ALERT "%s got read lockn", name);
+}
+
+static void release_read_lock(struct rw_semaphore *sem, char *name)
+{
+        printk(KERN_ALERT "%s releses read lockn", name);
+        up_read(sem);
+}
+
+static void get_write_lock(struct rw_semaphore *sem, char *name)
+{
+        printk(KERN_ALERT "%s is waiting for writen", name);
+
+        down_write(sem);
+
+        printk(KERN_ALERT "%s got write lockn", name);
+}
+
+static void release_write_lock(struct rw_semaphore *sem, char *name)
+{
+        printk(KERN_ALERT "%s releses write lockn", name);
+
+        up_write(sem);
+}
+
+int reader(void *data)
+{
+        char *name = (char *)data;
+
+        printk(KERN_ALERT "%s is runningn", name);
+
+        msleep(100);
+
+        get_read_lock(&sem, name);
+        print_sem(&sem);
+        printk(KERN_ALERT "%s is sleeping 200n", name);
+
+        msleep(200);
+        release_read_lock(&sem, name);
+        do_exit(0);
+}
+
+int writer(void *data)
+{
+        char *name = (char *)data;
+
+        printk(KERN_ALERT "%s is runningn", name);
+
+        msleep(10);
+
+        get_write_lock(&sem, name);
+        print_sem(&sem);
+        printk(KERN_ALERT "%s is sleeping 200n", name);
+
+        msleep(200);
+;
+        print_sem(&sem);
+        release_write_lock(&sem, name);
+        do_exit(0);
+}
+
+static int hello_init(void)
+{
+        struct task_struct *task = NULL;
+
+        printk(KERN_ALERT "Hello, worldn");
+        init_rwsem(&sem);
+
+        task = kthread_create(reader, "reader_1", "reader");
+        if (IS_ERR(task)) {
+                printk(KERN_DEBUG "failed to create taskn");
+                return 1;
+        }
+
+        wake_up_process(task);
+
+        task = kthread_create(reader, "reader_2", "reader");
+        if (IS_ERR(task)) {
+                printk(KERN_DEBUG "failed to create taskn");
+                return 1;
+        }
+
+        wake_up_process(task);
+
+        task = kthread_create(writer, "writer", "reader");
+        if (IS_ERR(task)) {
+                printk(KERN_DEBUG "failed to create taskn");
+                return 1;
+        }
+
+        wake_up_process(task);
+
+        msleep(100);
+
+        task = kthread_create(writer, "writer_2", "reader");
+        if (IS_ERR(task)) {
+                printk(KERN_DEBUG "failed to create taskn");
+                return 1;
+        }
+
+        wake_up_process(task);
+
+        return 0;
+}
+
+static void hello_exit(void)
+{
+        printk(KERN_ALERT"Goodbye, cruel worldn");
+}
+
+module_init(hello_init);
+module_exit(hello_exit);
+```
+
+此例子一次运行结果:
+``` c
+kernel: Hello, worldn
+kernel: reader_1 is runningn
+kernel: reader_2 is runningn
+kernel: writer is runningn
+kernel: writer is waiting for writen
+kernel: writer got write lockn
+kernel: sem.count=0xffffffff00000001n
+kernel: writer is sleeping 200n
+kernel: reader_2 is waiting for readn
+kernel: writer_2 is runningn
+kernel: reader_1 is waiting for readn
+kernel: writer_2 is waiting for writen
+kernel: sem.count=0xfffffffc00000001n
+kernel: writer releses write lockn
+kernel: reader_1 got read lockn
+kernel: reader_2 got read lockn
+kernel: sem.count=0xffffffff00000002n
+kernel: reader_2 is sleeping 200n
+kernel: sem.count=0xffffffff00000002n
+kernel: reader_1 is sleeping 200n
+kernel: reader_2 releses read lockn
+kernel: reader_1 releses read lockn
+kernel: writer_2 got write lockn
+kernel: sem.count=0xffffffff00000001n
+kernel: writer_2 is sleeping 200n
+kernel: sem.count=0xffffffff00000001n
+```
+大概就是 reader_1 reader_2 先运行后，进入睡眠。reader_2 获得 read 锁后，reader_1 依然能获得 read 锁。writer 先运行并获得 write 锁，之后 writer_2 运行，无法获取 write 锁。待 writer 释放后，write_2 才获得 write 锁。
 
 
 
