@@ -407,7 +407,7 @@ module_init(hello_init);
 module_exit(hello_cleanup);
 ```
 1. insmod ./hello.ko
-2. cat /proc/hello | grep hello 获取编号
+2. cat /proc/hello \| grep hello 获取编号
 3. mknod /dev/hello c 编号 1
 4. cat /dev/hello &
 5. echo "ok" >> /dev/hello
