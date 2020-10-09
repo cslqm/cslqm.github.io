@@ -1,3 +1,13 @@
+---
+layout: post
+title: "MySQL 索引"
+subtitle: 'MySQL update'
+author: "cslqm"
+header-style: text
+tags:
+  - MySQL
+---
+
 # 事务隔离
 
 MyISAM 引擎不支持隔离，InnoDB 支持隔离。
